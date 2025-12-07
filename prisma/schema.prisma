@@ -1,0 +1,339 @@
+// Prisma Schema for sun-nippo
+// サントリー営業日報アプリ データベーススキーマ
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========================================
+// ユーザー管理
+// ========================================
+
+/// ユーザーアカウント
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String   // bcrypt hashed
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  role      UserRole @default(SALES)
+  department String?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  visits       Visit[]
+  orders       Order[]
+  dailyReports DailyReport[]
+
+  @@map("users")
+}
+
+/// ユーザーロール
+enum UserRole {
+  SALES   // 営業担当者
+  MANAGER // マネージャー
+  ADMIN   // 管理者
+}
+
+// ========================================
+// マスタデータ
+// ========================================
+
+/// 店舗マスタ
+model Store {
+  id          String      @id @default(cuid())
+  code        String      @unique // 店舗コード
+  name        String      // 店舗名
+  type        StoreType   // 店舗区分
+  postalCode  String?     @map("postal_code")
+  prefecture  String?     // 都道府県
+  city        String?     // 市区町村
+  address     String?     // 番地
+  phone       String?
+  contactName String?     @map("contact_name")
+  email       String?
+  notes       String?     @db.Text
+  isActive    Boolean     @default(true) @map("is_active")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  visits Visit[]
+  orders Order[]
+
+  @@map("stores")
+}
+
+/// 店舗区分
+enum StoreType {
+  SUPERMARKET // スーパー
+  CONVENIENCE // コンビニ
+  RESTAURANT  // 飲食店
+  BAR         // バー・居酒屋
+  OTHER       // その他
+}
+
+/// 商品マスタ
+model Product {
+  id            String         @id @default(cuid())
+  code          String         @unique // 商品コード
+  name          String         // 商品名
+  category      ProductCategory
+  capacity      String?        // 容量（例: 350ml, 500ml）
+  standardPrice Int            @map("standard_price") // 標準価格（税込、円単位）
+  janCode       String?        @map("jan_code") // JANコード
+  notes         String?        @db.Text
+  isActive      Boolean        @default(true) @map("is_active")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  orderItems OrderItem[]
+  visitProducts VisitProduct[]
+
+  @@map("products")
+}
+
+/// 商品カテゴリ
+enum ProductCategory {
+  BEER         // ビール
+  HIGHBALL     // ハイボール
+  WHISKY       // ウイスキー
+  SOFTDRINK    // ソフトドリンク
+  OTHER        // その他
+}
+
+// ========================================
+// 訪問記録
+// ========================================
+
+/// 訪問記録
+model Visit {
+  id              String       @id @default(cuid())
+  userId          String       @map("user_id")
+  storeId         String       @map("store_id")
+  visitDate       DateTime     @map("visit_date") // 訪問日
+  visitStartTime  DateTime?    @map("visit_start_time") // 訪問開始時刻
+  visitEndTime    DateTime?    @map("visit_end_time") // 訪問終了時刻
+  purpose         VisitPurpose // 訪問目的
+  meetingContent  String?      @map("meeting_content") @db.Text // 商談内容
+  competitorInfo  String?      @map("competitor_info") @db.Text // 競合情報
+  storeCondition  String?      @map("store_condition") @db.Text // 店舗状況
+  nextVisitDate   DateTime?    @map("next_visit_date") // 次回訪問予定日
+  latitude        Float?       // GPS緯度
+  longitude       Float?       // GPS経度
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store           Store        @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  visitProducts   VisitProduct[] // 提案商品
+
+  @@index([userId])
+  @@index([storeId])
+  @@index([visitDate])
+  @@map("visits")
+}
+
+/// 訪問目的
+enum VisitPurpose {
+  REGULAR        // 定期訪問
+  NEW_CUSTOMER   // 新規開拓
+  COMPLAINT      // クレーム対応
+  PROPOSAL       // 商品提案
+  FOLLOW_UP      // フォローアップ
+  OTHER          // その他
+}
+
+/// 訪問時提案商品（中間テーブル）
+model VisitProduct {
+  id        String   @id @default(cuid())
+  visitId   String   @map("visit_id")
+  productId String   @map("product_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  visit   Visit   @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([visitId, productId])
+  @@index([visitId])
+  @@index([productId])
+  @@map("visit_products")
+}
+
+// ========================================
+// 受注管理
+// ========================================
+
+/// 受注
+model Order {
+  id             String      @id @default(cuid())
+  orderNumber    String      @unique @map("order_number") // 受注番号（自動生成）
+  userId         String      @map("user_id")
+  storeId        String      @map("store_id")
+  orderDate      DateTime    @map("order_date") // 受注日
+  deliveryDate   DateTime    @map("delivery_date") // 納品予定日
+  subtotal       Int         @default(0) // 小計（円）
+  discountAmount Int         @default(0) @map("discount_amount") // 割引額（円）
+  totalAmount    Int         @default(0) @map("total_amount") // 合計金額（円）
+  status         OrderStatus @default(PENDING)
+  notes          String?     @db.Text
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store      Store       @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  orderItems OrderItem[]
+
+  @@index([userId])
+  @@index([storeId])
+  @@index([orderDate])
+  @@index([orderNumber])
+  @@map("orders")
+}
+
+/// 受注ステータス
+enum OrderStatus {
+  PENDING   // 未確定
+  CONFIRMED // 確定
+  CANCELLED // キャンセル
+}
+
+/// 受注明細
+model OrderItem {
+  id        String   @id @default(cuid())
+  orderId   String   @map("order_id")
+  productId String   @map("product_id")
+  quantity  Int      // 数量
+  unitPrice Int      @map("unit_price") // 単価（円）
+  subtotal  Int      // 小計（円）= quantity × unitPrice
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// ========================================
+// 日報管理
+// ========================================
+
+/// 日報
+model DailyReport {
+  id             String             @id @default(cuid())
+  userId         String             @map("user_id")
+  reportDate     DateTime           @map("report_date") // 日報日付
+  visitCount     Int                @default(0) @map("visit_count") // 訪問件数
+  orderCount     Int                @default(0) @map("order_count") // 受注件数
+  totalSales     Int                @default(0) @map("total_sales") // 売上合計（円）
+  summary        String?            @db.Text // 活動サマリー（自動生成）
+  impression     String?            @db.Text // 所感（手動入力、必須）
+  issues         String?            @db.Text // 課題・問題点
+  tomorrowPlan   String?            @map("tomorrow_plan") @db.Text // 明日の予定
+  status         DailyReportStatus  @default(DRAFT)
+  submittedAt    DateTime?          @map("submitted_at") // 提出日時
+  reviewedBy     String?            @map("reviewed_by") // 承認者ID
+  reviewedAt     DateTime?          @map("reviewed_at") // 承認日時
+  rejectionReason String?           @map("rejection_reason") @db.Text // 差し戻し理由
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+
+  // Relations
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attachments ReportAttachment[]
+
+  @@unique([userId, reportDate])
+  @@index([userId])
+  @@index([reportDate])
+  @@index([status])
+  @@map("daily_reports")
+}
+
+/// 日報ステータス
+enum DailyReportStatus {
+  DRAFT     // 下書き
+  SUBMITTED // 提出済み
+  APPROVED  // 承認済み
+  REJECTED  // 差し戻し
+}
+
+/// 日報添付ファイル（Phase 2で実装予定）
+model ReportAttachment {
+  id           String      @id @default(cuid())
+  reportId     String      @map("report_id")
+  fileName     String      @map("file_name")
+  fileUrl      String      @map("file_url")
+  fileType     String      @map("file_type") // image/jpeg, image/png, etc.
+  fileSize     Int         @map("file_size") // bytes
+  description  String?     @db.Text
+  uploadedAt   DateTime    @default(now()) @map("uploaded_at")
+
+  // Relations
+  report DailyReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@map("report_attachments")
+}
+
+// ========================================
+// テンプレート・設定
+// ========================================
+
+/// テンプレート（定型文）
+model Template {
+  id        String       @id @default(cuid())
+  type      TemplateType
+  title     String
+  content   String       @db.Text
+  isActive  Boolean      @default(true) @map("is_active")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  @@map("templates")
+}
+
+/// テンプレート種別
+enum TemplateType {
+  MEETING_CONTENT  // 商談内容
+  STORE_CONDITION  // 店舗状況
+  IMPRESSION       // 所感
+  TOMORROW_PLAN    // 明日の予定
+}
+
+/// 通知
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  type      NotificationType
+  title     String
+  message   String           @db.Text
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([isRead])
+  @@map("notifications")
+}
+
+/// 通知種別
+enum NotificationType {
+  REPORT_SUBMITTED // 日報提出
+  REPORT_APPROVED  // 日報承認
+  REPORT_REJECTED  // 日報差し戻し
+  SYSTEM           // システム通知
+}
